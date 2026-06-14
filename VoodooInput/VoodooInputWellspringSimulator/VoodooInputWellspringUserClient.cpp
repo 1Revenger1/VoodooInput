@@ -12,32 +12,59 @@
 #define super IOUserClient
 OSDefineMetaClassAndStructors(VoodooInputWellspringUserClient, IOUserClient);
 
-#if defined(__x86_64__)
-#define MTExternalMethod(method, flags, inputs, outputs) {0, method, kIOExternalMethodACIDPadding, flags, inputs, outputs}
-#elif defined(__i386__)
-#define MTExternalMethod(method, flags, inputs, outputs) {0, kIOExternalMethodACIDPadding, method, flags, inputs, outputs}
+// https://github.com/acidanthera/MacKernelSDK/commit/e57a05e419adafe3c6efdf323b44f1c410b6aa48
+// https://github.com/acidanthera/MacKernelSDK#extensions-and-modifications
+// brief explanation:: No more IOExternalMethodACID custom struct in newer MacKernelSDK revisions, so not
+// necessary to later cast back to IOExternalMethod in getTargetAndMethodForIndex().
+// Still use different initializers per arch, but now also need different function pointer 
+// forms per arch. 
+// 
+// longer explanation: There are now two different callable types for the function pointers in IOExternalMethod::func
+// IOMethodACID32, a purely C function pointer that seemingly reconstructs the C++ ABI with an explicit "this"
+// parameter, and the normal IOMethod which is the normal C++ pointer to member function.
+// In C++, as it turns out, the 'static' keyword (in userclient header) indicates omitting the implicit "this" pointer
+// and essentially reduces the pointer to a normal C function pointer, and then padding is used 
+// Presumably this is the fix to the clang i386 ABI that the mackernelsdk devs devised to match old gcc,
+// by manually constructing the member to function pointer...
+// This concept for the fix is unchanged between the two revisions. I'm guessing the idea is that the C function pointer
+// is stable but the C++ ABI is not.
+
+// Now they've moved this fix to the real IOExternalMethod struct, by falling through to the normal member 
+// function pointers when not on i386 + clang, but they still use the IOMethodACID32 on i386, and the
+// struct is two different layouts depending on which arch you're on.
+// Since the real layout is used on x86_64, static functions can't be used anymore since 
+// you can't cast between the two pointer types, where before you *could* cast the entire IOExternalMethodACID struct.
+// so instead, the below selects between the two functions based on arch to construct the correct IOExternalMethod entry
+// that IOUserClient.h expects.
+
+// Flipped the logic to condition first on i386 AND clang so theoretically i386 on gcc from old Mac OS X
+// SDKs should compile ...but who's doing that?
+#if defined(__i386__) && defined(__clang__)
+#define MTExternalMethod(acidMethod, normalMethod, flags, inputs, outputs) \
+    {0, kIOExternalMethodACID32Padding, reinterpret_cast<IOMethodACID32>(acidMethod), flags, inputs, outputs}
 #else
-#error "Invalid architecture"
+#define MTExternalMethod(acidMethod, normalMethod, flags, inputs, outputs) \
+    {0, reinterpret_cast<IOMethod>(normalMethod), flags, inputs, outputs}
 #endif
 
-IOExternalMethodACID VoodooInputWellspringUserClient::sMethods[VoodooInputMT1UserClientMethodsNumMethods] = {
+IOExternalMethod VoodooInputWellspringUserClient::sMethods[VoodooInputMT1UserClientMethodsNumMethods] = {
     // VoodooInputMT1UserClientMethodsSetSendsFrames
-    MTExternalMethod((IOMethodACID) &VoodooInputWellspringUserClient::sSetSendFrames, kIOUCScalarIScalarO, 1, 0),
+    MTExternalMethod(&VoodooInputWellspringUserClient::sSetSendFrames, &VoodooInputWellspringUserClient::mSetSendFrames, kIOUCScalarIScalarO, 1, 0),
     // VoodooInputMT1UserClientMethodsGetReport
-    MTExternalMethod((IOMethodACID) &VoodooInputWellspringUserClient::sGetReport, kIOUCStructIStructO, sizeof(MTDeviceReportStruct), sizeof(MTDeviceReportStruct)),
+    MTExternalMethod(&VoodooInputWellspringUserClient::sGetReport, &VoodooInputWellspringUserClient::mGetReport, kIOUCStructIStructO, sizeof(MTDeviceReportStruct), sizeof(MTDeviceReportStruct)),
     // VoodooInputMT1UserClientMethodsSetReport
-    MTExternalMethod((IOMethodACID) &VoodooInputWellspringUserClient::sNoop, kIOUCStructIStructO, sizeof(MTDeviceReportStruct), sizeof(MTDeviceReportStruct)),
+    MTExternalMethod(&VoodooInputWellspringUserClient::sNoop, &VoodooInputWellspringUserClient::mNoop, kIOUCStructIStructO, sizeof(MTDeviceReportStruct), sizeof(MTDeviceReportStruct)),
     // VoodooInputMT1UserClientMethodsSetSendLogs
-    MTExternalMethod((IOMethodACID) &VoodooInputWellspringUserClient::sNoop, kIOUCScalarIScalarO, 1, 0),
+    MTExternalMethod(&VoodooInputWellspringUserClient::sNoop, &VoodooInputWellspringUserClient::mNoop, kIOUCScalarIScalarO, 1, 0),
     // VoodooInputMT1UserClientMethodsIssueDriverRequest
-    MTExternalMethod((IOMethodACID) &VoodooInputWellspringUserClient::sNoop, kIOUCStructIStructO, 0x204, 0x204),
-    MTExternalMethod((IOMethodACID) &VoodooInputWellspringUserClient::sPostRelativeMouse, kIOUCScalarIScalarO, 3, 0),
-    MTExternalMethod((IOMethodACID) &VoodooInputWellspringUserClient::sPostScrollWheel, kIOUCScalarIScalarO, 3, 0),
-    MTExternalMethod((IOMethodACID) &VoodooInputWellspringUserClient::sPostKeyboard, kIOUCScalarIScalarO, 2, 0),
-    MTExternalMethod((IOMethodACID) &VoodooInputWellspringUserClient::sNoop, kIOUCScalarIScalarO, 1, 0),    // Map Clicks
+    MTExternalMethod(&VoodooInputWellspringUserClient::sNoop, &VoodooInputWellspringUserClient::mNoop, kIOUCStructIStructO, 0x204, 0x204),
+    MTExternalMethod(&VoodooInputWellspringUserClient::sPostRelativeMouse, &VoodooInputWellspringUserClient::mPostRelativeMouse, kIOUCScalarIScalarO, 3, 0),
+    MTExternalMethod(&VoodooInputWellspringUserClient::sPostScrollWheel, &VoodooInputWellspringUserClient::mPostScrollWheel, kIOUCScalarIScalarO, 3, 0),
+    MTExternalMethod(&VoodooInputWellspringUserClient::sPostKeyboard, &VoodooInputWellspringUserClient::mPostKeyboard, kIOUCScalarIScalarO, 2, 0),
+    MTExternalMethod(&VoodooInputWellspringUserClient::sNoop, &VoodooInputWellspringUserClient::mNoop, kIOUCScalarIScalarO, 1, 0),    // Map Clicks
     // VoodooInputMT1UserClientMethodsRecacheProperties
-    MTExternalMethod((IOMethodACID) &VoodooInputWellspringUserClient::sNoop, kIOUCScalarIScalarO, 0, 0),
-    MTExternalMethod((IOMethodACID) &VoodooInputWellspringUserClient::sMomentumScroll, kIOUCScalarIScalarO, 3, 0),
+    MTExternalMethod(&VoodooInputWellspringUserClient::sNoop, &VoodooInputWellspringUserClient::mNoop, kIOUCScalarIScalarO, 0, 0),
+    MTExternalMethod(&VoodooInputWellspringUserClient::sMomentumScroll, &VoodooInputWellspringUserClient::mMomentumScroll, kIOUCScalarIScalarO, 3, 0),
 };
 
 bool VoodooInputWellspringUserClient::start(IOService *provider) {
@@ -103,7 +130,44 @@ IOExternalMethod *VoodooInputWellspringUserClient::getTargetAndMethodForIndex(IO
     }
     
     *targetP = this;
-    return reinterpret_cast<IOExternalMethod *>(&sMethods[index]);
+    // no cast anymore
+    return &sMethods[index];
+}
+
+// Member shims to reuse the static functions
+IOReturn VoodooInputWellspringUserClient::mSetSendFrames(void *p1, void *p2, void *p3, void *p4, void *p5, void *p6) {
+    return sSetSendFrames(this, static_cast<bool>(reinterpret_cast<uintptr_t>(p1)));
+}
+
+IOReturn VoodooInputWellspringUserClient::mGetReport(void *p1, void *p2, void *p3, void *p4, void *p5, void *p6) {
+    return sGetReport(this, reinterpret_cast<MTDeviceReportStruct *>(p1), reinterpret_cast<MTDeviceReportStruct *>(p2));
+}
+
+IOReturn VoodooInputWellspringUserClient::mNoop(void *p1, void *p2, void *p3, void *p4, void *p5, void *p6) {
+    return sNoop(this, p1, p2, p3, p4, p5, p6);
+}
+
+IOReturn VoodooInputWellspringUserClient::mPostRelativeMouse(void *p1, void *p2, void *p3, void *p4, void *p5, void *p6) {
+    return sPostRelativeMouse(this, static_cast<SInt32>(reinterpret_cast<intptr_t>(p1)),
+                              static_cast<SInt32>(reinterpret_cast<intptr_t>(p2)),
+                              static_cast<UInt32>(reinterpret_cast<uintptr_t>(p3)));
+}
+
+IOReturn VoodooInputWellspringUserClient::mPostScrollWheel(void *p1, void *p2, void *p3, void *p4, void *p5, void *p6) {
+    return sPostScrollWheel(this, static_cast<SInt32>(reinterpret_cast<intptr_t>(p1)),
+                            static_cast<SInt32>(reinterpret_cast<intptr_t>(p2)),
+                            static_cast<SInt32>(reinterpret_cast<intptr_t>(p3)));
+}
+
+IOReturn VoodooInputWellspringUserClient::mPostKeyboard(void *p1, void *p2, void *p3, void *p4, void *p5, void *p6) {
+    return sPostKeyboard(this, static_cast<UInt32>(reinterpret_cast<uintptr_t>(p1)),
+                         static_cast<UInt32>(reinterpret_cast<uintptr_t>(p2)));
+}
+
+IOReturn VoodooInputWellspringUserClient::mMomentumScroll(void *p1, void *p2, void *p3, void *p4, void *p5, void *p6) {
+    return sMomentumScroll(this, static_cast<SInt32>(reinterpret_cast<intptr_t>(p1)),
+                           static_cast<SInt32>(reinterpret_cast<intptr_t>(p2)),
+                           static_cast<SInt32>(reinterpret_cast<intptr_t>(p3)));
 }
 
 IOReturn VoodooInputWellspringUserClient::sSetSendFrames(VoodooInputWellspringUserClient *that, bool enableReports) {

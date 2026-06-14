@@ -14,14 +14,14 @@ env:
 jobs:
   build:
     name: Build
-    runs-on: macos-12
+    runs-on: macos-15-intel
     env:
       JOB_TYPE: BUILD
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with:
-          repository: acidanthera/MacKernelSDK
+          repository: newhacker1746/MacKernelSDK
           path: MacKernelSDK
       - name: CI Bootstrap
         run: |
